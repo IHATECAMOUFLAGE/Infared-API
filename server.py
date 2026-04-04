@@ -1,40 +1,57 @@
 from flask import Flask, request, Response, stream_with_context, jsonify, render_template
-import yt_dlp
 import requests
 
 app = Flask(__name__)
 
-# Route 1: Serve the HTML page
+# We use a public Invidious instance. 
+# If this one is down, you can swap it for another like: https://invidious.snopyta.org
+INVIDIOUS_INSTANCE = "https://vid.puffyan.us"
+
 @app.route('/')
 def home():
     return render_template('index.html')
 
-# Route 2: Get Video Info (Metadata)
 @app.route('/get-video-info', methods=['GET'])
 def get_video_info():
     url = request.args.get('url')
     
-    # NOTE: To save bandwidth on Render, you might want to lower quality here.
-    # e.g., 'format': 'worst' or 'best[height<=480]' 
-    ydl_opts = {
-        'format': 'best', 
-        'quiet': True,
-        'no_warnings': True,
-    }
-
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return jsonify({
-                'title': info.get('title'),
-                'stream_url': info.get('url')
-            })
+        # Extract Video ID from URL (e.g., https://youtu.be/JFtlf8RoPZY -> JFtlf8RoPZY)
+        if "v=" in url:
+            video_id = url.split("v=")[1].split("&")[0]
+        elif "youtu.be/" in url:
+            video_id = url.split("youtu.be/")[1].split("?")[0]
+        else:
+            return jsonify({'error': 'Invalid YouTube URL'}), 400
+
+        # Ask Invidious for the video data
+        # No cookies needed here!
+        api_url = f"{INVIDIOUS_INSTANCE}/api/v1/videos/{video_id}"
+        response = requests.get(api_url)
+        
+        if response.status_code != 200:
+            return jsonify({'error': 'Failed to fetch video info from Invidious'}), 500
+
+        data = response.json()
+
+        # Invidious returns 'formatStreams' which contains combined video+audio URLs
+        # We pick the first one (usually the best quality for that container)
+        if not data.get('formatStreams'):
+             return jsonify({'error': 'No video streams found'}), 500
+
+        best_stream = data['formatStreams'][0]
+        
+        return jsonify({
+            'title': data.get('title'),
+            'stream_url': best_stream.get('url')
+        })
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Route 3: The Proxy (Streams video data)
 @app.route('/proxy-video')
 def proxy_video():
+    # The proxy logic remains the same to hide the Referer
     video_url = request.args.get('url')
     
     if not video_url:
@@ -46,7 +63,6 @@ def proxy_video():
         'Accept': '*/*',
     }
 
-    # Stream the content
     req = requests.get(video_url, headers=headers, stream=True)
 
     def generate():
@@ -63,5 +79,4 @@ def proxy_video():
     )
 
 if __name__ == '__main__':
-    # This is only for local testing. Render uses Gunicorn.
     app.run(debug=True, port=5000)
