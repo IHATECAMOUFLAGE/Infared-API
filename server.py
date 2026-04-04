@@ -1,58 +1,71 @@
-import os
-import requests
-import yt_dlp
 from flask import Flask, request, Response, stream_with_context
+import yt_dlp
+import requests
 
 app = Flask(__name__)
 
-# Configuration for yt-dlp
-YDL_OPTS = {
-    'format': 'best[ext=mp4]/best',
-    'quiet': True,
-    'no_warnings': True,
-    'extractor_args': {'youtube': {'player_client': ['android']}},
-    'cookiefile': 'cookies.txt', # This tells it to use the public file you just added
-}
-
-@app.route('/watch')
-def watch():
-    video_url = request.args.get('url')
+@app.route('/get-video-info', methods=['GET'])
+def get_video_info():
+    """Gets the metadata and the direct stream URL from YouTube"""
+    url = request.args.get('url')
     
-    if not video_url:
-        return "Error: Please provide a ?url= parameter", 400
+    ydl_opts = {
+        'format': 'best',
+        'quiet': True,
+        'no_warnings': True,
+    }
 
     try:
-        # 1. Get the direct video URL from YouTube
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            video_url_direct = info['url']
-        
-        # 2. Request the video data from YouTube
-        # We pass the 'Range' header so users can skip/seek the video
-        headers = {}
-        if 'Range' in request.headers:
-            headers['Range'] = request.headers['Range']
-
-        req = requests.get(video_url_direct, headers=headers, stream=True)
-
-        # 3. Stream the data back to the user
-        def generate():
-            for chunk in req.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-
-        return Response(
-            stream_with_context(generate()),
-            content_type=req.headers['Content-Type'],
-            headers={
-                'Content-Length': req.headers.get('Content-Length'),
-                'Accept-Ranges': 'bytes',
-            }
-        )
-
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return jsonify({
+                'title': info.get('title'),
+                # We return the direct GoogleVideo URL
+                'stream_url': info.get('url')
+            })
     except Exception as e:
-        return f"Error: {str(e)}", 500
+        return jsonify({'error': str(e)}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+@app.route('/proxy-video')
+def proxy_video():
+    """
+    The browser requests this route.
+    This route requests the video from YouTube (spoofing the referer)
+    and pipes the data back to the browser.
+    """
+    video_url = request.args.get('url')
+
+    if not video_url:
+        return "No URL provided", 400
+
+    # 1. Define the headers to send to YouTube
+    # We pretend we are a normal browser on youtube.com
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Referer': 'https://www.youtube.com/',  # This spoofs the origin
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'keep-alive',
+    }
+
+    # 2. Request the video from YouTube using your Server's IP
+    req = requests.get(video_url, headers=headers, stream=True)
+
+    # 3. Stream the content back to the user
+    # This ensures YouTube sees the request coming from your server, not the user's browser
+    def generate():
+        for chunk in req.iter_content(chunk_size=8192):
+            yield chunk
+
+    return Response(
+        stream_with_context(generate()),
+        content_type=req.headers.get('Content-Type'),
+        headers={
+            # We can optionally force the filename to download or play inline
+            'Content-Disposition': 'inline; filename=video.mp4',
+            'Accept-Ranges': 'bytes',
+        }
+    )
+
+if __name__ == '/proxy-video':
+    app.run(debug=True, port=5000)
