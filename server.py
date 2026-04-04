@@ -7,9 +7,11 @@ app = Flask(__name__)
 
 # Configuration for yt-dlp
 YDL_OPTS = {
-    'format': 'best[ext=mp4]/best', # Gets the best MP4 video
+    'format': 'best[ext=mp4]/best',
     'quiet': True,
     'no_warnings': True,
+    'extractor_args': {'youtube': {'player_client': ['android']}},
+    'cookiefile': 'cookies.txt', # This tells it to use the public file you just added
 }
 
 @app.route('/watch')
