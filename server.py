@@ -1,33 +1,30 @@
 from flask import Flask, request, Response, stream_with_context, jsonify, render_template
 import requests
+import urllib3
+
+# Disable SSL warnings for the console logs
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# List of Invidious instances to try.
-# Your requested instance is first. If it fails, it tries the others automatically.
+# Fresh list of instances known to be relatively stable
 INSTANCES = [
-    "https://invidious.nerdvpn.de",
+    "https://invidious.perennialte.ch",
     "https://yewtu.be",
+    "https://inv.citruslimes.net",
+    "https://invidious.nerdvpn.de",
     "https://invidious.fdn.fr",
-    "https://inv.bp.projectsegfau.lt",
-    "https://invidious.io",
-    "https://vid.puffyan.us"
+    "https://invidious.slipfox.xyz"
 ]
 
 @app.route('/')
 def home():
-    """Serves the HTML page"""
     return render_template('index.html')
 
 @app.route('/get-video-info', methods=['GET'])
 def get_video_info():
-    """
-    Gets video metadata (title, stream URL) from Invidious.
-    Loops through instances until one responds successfully.
-    """
     url = request.args.get('url')
     
-    # 1. Extract Video ID from various URL formats
     video_id = None
     if "v=" in url:
         video_id = url.split("v=")[1].split("&")[0]
@@ -37,58 +34,61 @@ def get_video_info():
     if not video_id:
         return jsonify({'error': 'Invalid YouTube URL'}), 400
 
-    # 2. Try fetching from instances
+    # Loop through instances
     for instance in INSTANCES:
         try:
             api_url = f"{instance}/api/v1/videos/{video_id}"
             
-            # Timeout of 5 seconds ensures we don't wait for dead servers
-            response = requests.get(api_url, timeout=5)
+            # KEY CHANGES HERE:
+            # 1. timeout=15 (Wait longer for slow servers)
+            # 2. verify=False (Ignore SSL certificate errors)
+            response = requests.get(api_url, timeout=15, verify=False)
             
             if response.status_code == 200:
                 data = response.json()
                 
-                # Check if streams exist
                 if data.get('formatStreams'):
                     best_stream = data['formatStreams'][0]
+                    print(f"SUCCESS: Used instance {instance}") # This prints to Render Logs
                     return jsonify({
                         'title': data.get('title'),
                         'stream_url': best_stream.get('url'),
-                        'instance': instance # Optional: helps debug which one worked
+                        'instance': instance
                     })
-                
-        except requests.exceptions.RequestException:
-            # Connection failed (Timeout, DNS error, etc.), try next instance
+                else:
+                    print(f"FAIL {instance}: No streams found in response")
+                    continue
+                    
+        except requests.exceptions.Timeout:
+            print(f"FAIL {instance}: Timed out (server too slow)")
             continue
-        except Exception:
-            # JSON decode error or other issue, try next instance
+        except requests.exceptions.SSLError:
+            print(f"FAIL {instance}: SSL Error")
+            continue
+        except Exception as e:
+            print(f"FAIL {instance}: {str(e)}")
             continue
 
-    return jsonify({'error': 'All Invidious instances failed to respond.'}), 500
+    return jsonify({'error': 'All instances failed. Check Render Logs for details.'}), 500
 
 @app.route('/proxy-video')
 def proxy_video():
-    """
-    Proxies the video stream.
-    The browser requests this route, and this route requests the video from GoogleVideo.
-    This hides the user's IP and Referer from YouTube.
-    """
     video_url = request.args.get('url')
     
     if not video_url:
         return "No URL provided", 400
 
-    # Headers to send to YouTube to pretend we are a normal browser
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Referer': 'https://www.youtube.com/',
         'Accept': '*/*',
     }
 
-    # Request the video stream
-    req = requests.get(video_url, headers=headers, stream=True)
+    try:
+        req = requests.get(video_url, headers=headers, stream=True, verify=False)
+    except Exception as e:
+        return f"Proxy Error: {str(e)}", 500
 
-    # Generator function to stream chunks to the browser
     def generate():
         for chunk in req.iter_content(chunk_size=8192):
             yield chunk
