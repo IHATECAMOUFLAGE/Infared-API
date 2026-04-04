@@ -7,18 +7,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# THE GOLD STANDARD LIST
-# These are the most stable instances that allow API access.
-INSTANCES = [
-    "https://yewtu.be",                # Most reliable public instance
-    "https://invidious.kavin.rocks",   # Highly maintained
-    "https://invidious.perennialte.ch",# Very stable
-    "https://invidious.nerdvpn.de",    # Your preferred one (kept, but lower priority)
-    "https://invidious.snopyta.org"    # Backup
+# Piped API Instances (These are generally more reliable on Render than Invidious)
+PIPED_INSTANCES = [
+    "https://pipedapi.kavin.rocks",          # Primary API
+    "https://piped-api.garudalinux.org",     # Backup
+    "https://api.piped.io"                    # Backup
 ]
 
-# MODERN USER AGENT
-# Using an old agent (Chrome 91) gets you blocked. Using a modern one helps.
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
@@ -41,36 +36,57 @@ def get_video_info():
     if not video_id:
         return jsonify({'error': 'Invalid YouTube URL'}), 400
 
-    for instance in INSTANCES:
+    for instance in PIPED_INSTANCES:
         try:
-            api_url = f"{instance}/api/v1/videos/{video_id}"
+            # Piped API Endpoint
+            api_url = f"{instance}/streams/{video_id}"
             
-            # Request with the Modern User Agent
             response = requests.get(api_url, headers=HEADERS, timeout=10, verify=False)
             
+            # Check if we got HTML (Error page) instead of JSON
+            content_type = response.headers.get('Content-Type', '')
+            if 'text/html' in content_type:
+                print(f"⚠️ FAIL {instance}: Received HTML (Likely Blocked/Captcha)")
+                continue
+
             if response.status_code == 200:
                 data = response.json()
                 
-                if data.get('formatStreams'):
-                    best_stream = data['formatStreams'][0]
-                    print(f"✅ SUCCESS via {instance}")
+                # Piped separates video and audio streams. 
+                # For a simple <video> tag to work with sound, we need a "Combined" stream (muxed).
+                # Usually found in 'videoStreams' where 'videoOnly' is False.
+                
+                target_stream = None
+                
+                # Look for a non-videoOnly stream (contains audio)
+                if 'videoStreams' in data:
+                    for stream in data['videoStreams']:
+                        # We want a stream that is NOT video only
+                        if not stream.get('videoOnly', True):
+                            target_stream = stream
+                            break
+                    
+                    # Fallback: If no combined stream, take the first video-only one (User will hear no sound)
+                    # This is better than nothing, but usually 360p/480p are combined.
+                    if not target_stream and data['videoStreams']:
+                        target_stream = data['videoStreams'][0]
+
+                if target_stream:
+                    print(f"✅ SUCCESS via {instance} (Format: {target_stream.get('quality', 'unknown')})")
                     return jsonify({
-                        'title': data.get('title'),
-                        'stream_url': best_stream.get('url'),
+                        'title': data.get('title', 'Video'),
+                        'stream_url': target_stream.get('url'),
                         'instance': instance
                     })
                 else:
-                    print(f"⚠️ FAIL {instance}: No streams found")
+                    print(f"⚠️ FAIL {instance}: No playable streams found")
                     continue
                     
-        except requests.exceptions.SSLError:
-            print(f"⚠️ FAIL {instance}: SSL Error")
-            continue
         except Exception as e:
             print(f"⚠️ FAIL {instance}: {str(e)}")
             continue
 
-    return jsonify({'error': 'Failed to fetch video. All top instances are busy or blocked.'}), 500
+    return jsonify({'error': 'Piped API failed. Render Free Tier IPs might be rate-limited.'}), 500
 
 @app.route('/proxy-video')
 def proxy_video():
@@ -78,7 +94,6 @@ def proxy_video():
     if not video_url:
         return "No URL provided", 400
 
-    # Use modern headers for the proxy too
     headers = {
         **HEADERS,
         'Referer': 'https://www.youtube.com/',
