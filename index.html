@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- This meta tag ensures the browser doesn't send a Referer to YOUR OWN proxy either -->
+    <meta name="referrer" content="no-referrer"> 
+    <title>Stealth YouTube Player</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        video { width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.1); background: black; }
+    </style>
+</head>
+<body>
+
+    <h1>Stealth Player</h1>
+    <input type="text" id="videoUrl" placeholder="Paste YouTube Link here..." style="width: 70%;">
+    <button onclick="loadVideo()">Load</button>
+
+    <video id="player" controls style="display:none;"></video>
+
+    <script>
+        async function loadVideo() {
+            const url = document.getElementById('videoUrl').value;
+            const player = document.getElementById('player');
+
+            // 1. Ask your server for the direct URL metadata
+            const res = await fetch(`http://localhost:5000/get-video-info?url=${encodeURIComponent(url)}`);
+            const data = await res.json();
+
+            if (data.error) {
+                alert("Error: " + data.error);
+                return;
+            }
+
+            // 2. Point the player to your PROXY route, not the direct URL
+            // We pass the YouTube URL as a parameter to our proxy
+            player.src = `http://localhost:5000/proxy-video?url=${encodeURIComponent(data.stream_url)}`;
+            
+            player.style.display = 'block';
+            player.play();
+        }
+    </script>
+</body>
+</html>
