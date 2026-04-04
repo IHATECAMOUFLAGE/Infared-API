@@ -2,20 +2,26 @@ from flask import Flask, request, Response, stream_with_context, jsonify, render
 import requests
 import urllib3
 
-# Disable SSL warnings for the console logs
+# Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
-# Fresh list of instances known to be relatively stable
+# THE GOLD STANDARD LIST
+# These are the most stable instances that allow API access.
 INSTANCES = [
-    "https://invidious.perennialte.ch",
-    "https://yewtu.be",
-    "https://inv.citruslimes.net",
-    "https://invidious.nerdvpn.de",
-    "https://invidious.fdn.fr",
-    "https://invidious.slipfox.xyz"
+    "https://yewtu.be",                # Most reliable public instance
+    "https://invidious.kavin.rocks",   # Highly maintained
+    "https://invidious.perennialte.ch",# Very stable
+    "https://invidious.nerdvpn.de",    # Your preferred one (kept, but lower priority)
+    "https://invidious.snopyta.org"    # Backup
 ]
+
+# MODERN USER AGENT
+# Using an old agent (Chrome 91) gets you blocked. Using a modern one helps.
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
 
 @app.route('/')
 def home():
@@ -25,6 +31,7 @@ def home():
 def get_video_info():
     url = request.args.get('url')
     
+    # Extract Video ID
     video_id = None
     if "v=" in url:
         video_id = url.split("v=")[1].split("&")[0]
@@ -34,60 +41,51 @@ def get_video_info():
     if not video_id:
         return jsonify({'error': 'Invalid YouTube URL'}), 400
 
-    # Loop through instances
     for instance in INSTANCES:
         try:
             api_url = f"{instance}/api/v1/videos/{video_id}"
             
-            # KEY CHANGES HERE:
-            # 1. timeout=15 (Wait longer for slow servers)
-            # 2. verify=False (Ignore SSL certificate errors)
-            response = requests.get(api_url, timeout=15, verify=False)
+            # Request with the Modern User Agent
+            response = requests.get(api_url, headers=HEADERS, timeout=10, verify=False)
             
             if response.status_code == 200:
                 data = response.json()
                 
                 if data.get('formatStreams'):
                     best_stream = data['formatStreams'][0]
-                    print(f"SUCCESS: Used instance {instance}") # This prints to Render Logs
+                    print(f"✅ SUCCESS via {instance}")
                     return jsonify({
                         'title': data.get('title'),
                         'stream_url': best_stream.get('url'),
                         'instance': instance
                     })
                 else:
-                    print(f"FAIL {instance}: No streams found in response")
+                    print(f"⚠️ FAIL {instance}: No streams found")
                     continue
                     
-        except requests.exceptions.Timeout:
-            print(f"FAIL {instance}: Timed out (server too slow)")
-            continue
         except requests.exceptions.SSLError:
-            print(f"FAIL {instance}: SSL Error")
+            print(f"⚠️ FAIL {instance}: SSL Error")
             continue
         except Exception as e:
-            print(f"FAIL {instance}: {str(e)}")
+            print(f"⚠️ FAIL {instance}: {str(e)}")
             continue
 
-    return jsonify({'error': 'All instances failed. Check Render Logs for details.'}), 500
+    return jsonify({'error': 'Failed to fetch video. All top instances are busy or blocked.'}), 500
 
 @app.route('/proxy-video')
 def proxy_video():
     video_url = request.args.get('url')
-    
     if not video_url:
         return "No URL provided", 400
 
+    # Use modern headers for the proxy too
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        **HEADERS,
         'Referer': 'https://www.youtube.com/',
         'Accept': '*/*',
     }
 
-    try:
-        req = requests.get(video_url, headers=headers, stream=True, verify=False)
-    except Exception as e:
-        return f"Proxy Error: {str(e)}", 500
+    req = requests.get(video_url, headers=headers, stream=True, verify=False)
 
     def generate():
         for chunk in req.iter_content(chunk_size=8192):
