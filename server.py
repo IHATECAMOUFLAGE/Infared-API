@@ -5,10 +5,9 @@ from flask import Flask, request, Response, stream_with_context
 
 app = Flask(__name__)
 
-# Configuration for yt-dlp to get the direct stream URL
-# We specifically look for mp4 format for best browser compatibility
+# Configuration for yt-dlp
 YDL_OPTS = {
-    'format': 'best[ext=mp4]/best',
+    'format': 'best[ext=mp4]/best', # Gets the best MP4 video
     'quiet': True,
     'no_warnings': True,
 }
@@ -18,25 +17,23 @@ def watch():
     video_url = request.args.get('url')
     
     if not video_url:
-        return "Error: No URL provided", 400
+        return "Error: Please provide a ?url= parameter", 400
 
     try:
-        # 1. Extract info using yt-dlp
+        # 1. Get the direct video URL from YouTube
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
             info = ydl.extract_info(video_url, download=False)
             video_url_direct = info['url']
-            
-        # 2. Prepare the request to YouTube
-        # We pass the user's range headers (for seeking/scrubbing) to YouTube
+        
+        # 2. Request the video data from YouTube
+        # We pass the 'Range' header so users can skip/seek the video
         headers = {}
         if 'Range' in request.headers:
             headers['Range'] = request.headers['Range']
 
-        # 3. Stream the content from YouTube to your client
-        # stream=True ensures we don't download the whole video to RAM first
         req = requests.get(video_url_direct, headers=headers, stream=True)
 
-        # 4. Generate the response
+        # 3. Stream the data back to the user
         def generate():
             for chunk in req.iter_content(chunk_size=8192):
                 if chunk:
@@ -47,14 +44,13 @@ def watch():
             content_type=req.headers['Content-Type'],
             headers={
                 'Content-Length': req.headers.get('Content-Length'),
-                'Accept-Ranges': 'bytes', # Important for video seeking
+                'Accept-Ranges': 'bytes',
             }
         )
 
     except Exception as e:
-        return f"Error processing video: {str(e)}", 500
+        return f"Error: {str(e)}", 500
 
 if __name__ == '__main__':
-    # Render sets the PORT environment variable
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
