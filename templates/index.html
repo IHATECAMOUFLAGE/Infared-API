@@ -2,60 +2,167 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <!-- Prevents the browser from sending Referer info -->
     <meta name="referrer" content="no-referrer"> 
     <title>Stealth YouTube Player</title>
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f4f4f9; }
-        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        input { padding: 10px; width: 60%; border: 1px solid #ddd; border-radius: 4px; }
-        button { padding: 10px 20px; background: #ff0000; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #cc0000; }
-        video { width: 100%; margin-top: 20px; background: black; border-radius: 4px; }
+        /* Basic styling */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background-color: #1e1e1e;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+            width: 100%;
+            max-width: 800px;
+            text-align: center;
+        }
+
+        h1 { margin-top: 0; color: #ff0000; }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input {
+            flex: 1;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #333;
+            background-color: #2c2c2c;
+            color: white;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 12px 24px;
+            background-color: #ff0000;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+
+        button:hover { background-color: #cc0000; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+
+        video {
+            width: 100%;
+            border-radius: 8px;
+            background: black;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            display: none; /* Hidden until loaded */
+        }
+
+        .status {
+            margin-top: 10px;
+            color: #aaa;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
 
     <div class="container">
         <h1>Stealth Player</h1>
-        <p>Paste a YouTube link below:</p>
-        <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=...">
-        <button onclick="loadVideo()">Play</button>
+        <p>Paste a YouTube link below to play without ads or tracking.</p>
+        
+        <div class="input-group">
+            <input type="text" id="videoUrl" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+            <button id="playBtn" onclick="loadVideo()">Play</button>
+        </div>
 
-        <video id="player" controls style="display:none;"></video>
+        <div id="status" class="status"></div>
+
+        <!-- The Native HTML5 Player -->
+        <video id="player" controls></video>
     </div>
 
     <script>
+        const player = document.getElementById('player');
+        const playBtn = document.getElementById('playBtn');
+        const statusDiv = document.getElementById('status');
+
         async function loadVideo() {
             const url = document.getElementById('videoUrl').value;
-            const player = document.getElementById('player');
 
-            if (!url) return;
+            if (!url) {
+                alert("Please enter a YouTube URL");
+                return;
+            }
 
+            // UI Updates
+            playBtn.disabled = true;
+            playBtn.textContent = "Loading...";
             player.style.display = 'block';
-            player.textContent = "Loading...";
+            player.textContent = "Connecting to proxy...";
+            statusDiv.textContent = "";
+            player.src = "";
 
             try {
-                // USE RELATIVE PATHS HERE (remove localhost part)
-                // 1. Get info
+                // Step 1: Get video info from your Python backend (which talks to Invidious)
+                // We use relative paths because the HTML is served by the same Flask app
                 const res = await fetch(`/get-video-info?url=${encodeURIComponent(url)}`);
                 const data = await res.json();
 
                 if (data.error) {
-                    alert("Error: " + data.error);
-                    player.style.display = 'none';
-                    return;
+                    throw new Error(data.error);
                 }
 
-                // 2. Set player to proxy
+                // Debugging info (optional)
+                console.log("Using Instance:", data.instance);
+                console.log("Title:", data.title);
+
+                statusDiv.textContent = `Playing: ${data.title}`;
+
+                // Step 2: Set the player source to your Proxy route
+                // The proxy fetches the actual video bytes and pipes them to the browser
                 player.src = `/proxy-video?url=${encodeURIComponent(data.stream_url)}`;
+                
                 player.load();
-                player.play();
+                
+                // Auto-play (might be blocked by browser if audio is on, so we handle promise)
+                const playPromise = player.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(error => {
+                        console.log("Auto-play prevented by browser. User must click play.");
+                    });
+                }
 
             } catch (err) {
                 console.error(err);
-                alert("Connection failed.");
+                statusDiv.textContent = "Error: " + err.message;
+                player.style.display = 'none';
+                alert("Failed to load video. Check console for details.");
+            } finally {
+                playBtn.disabled = false;
+                playBtn.textContent = "Play";
             }
         }
+        
+        // Allow pressing "Enter" in the input box to trigger play
+        document.getElementById("videoUrl").addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                loadVideo();
+            }
+        });
     </script>
 </body>
 </html>
